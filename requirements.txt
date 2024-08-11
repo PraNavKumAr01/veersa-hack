@@ -4,3 +4,5 @@ requests
 pydantic
 python-dotenv
 textblob
+langchain
+langchain_groq
