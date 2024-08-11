@@ -1,5 +1,6 @@
 import base64
 import os
+import json
 from typing import List, Dict
 import requests
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +8,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from textblob import TextBlob
+from langchain_groq import ChatGroq
+from langchain.prompts import PromptTemplate
 
 load_dotenv()
 
@@ -27,6 +30,42 @@ app.add_middleware(
 API_KEY = os.getenv("DG_API_KEY")
 DEEPGRAM_URL = 'https://api.deepgram.com/v1/listen?model=nova-2&diarize=true&filler_words=true'
 
+os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
+
+llm = ChatGroq(temperature=0.5, model_name="llama3-8b-8192")
+
+ner_prompt = PromptTemplate(
+    input_variables=["transcript"],
+    template="""
+You are an AI assistant specialized in medical named entity recognition. Your task is to analyze the given medical transcript and extract two types of entities: medical conditions and medications.
+
+Transcript to analyze:
+{transcript}
+
+Please perform the following tasks:
+1. Identify all medical conditions mentioned in the transcript.
+2. Identify all medications mentioned in the transcript.
+3. Return the results in a JSON format with two keys: "conditions" and "medications". Each key should have a list of unique items as its value.
+
+Rules:
+- Include only clearly stated conditions and medications.
+- Do not infer conditions or medications that are not explicitly mentioned.
+- Use the exact terms as they appear in the transcript.
+- If no conditions or medications are found, return an empty list for that category.
+
+Your response should be in the following JSON format and nothing else:
+
+{{
+    "conditions": ["condition1", "condition2", ...],
+    "medications": ["medication1", "medication2", ...]
+}}
+
+Respond with just the json and nothing before or after that
+"""
+)
+
+query_chain = ner_prompt | llm
+
 FILLER_WORDS = ['uh', 'um', 'mhmm', 'mm-mm', 'uh-uh', 'uh-huh', 'nuh-uh']
 
 class AudioRequest(BaseModel):
@@ -37,6 +76,20 @@ def count_filler_words(sentence: str) -> int:
 
 def get_sentiment(sentence: str) -> float:
     return TextBlob(sentence).sentiment.polarity
+
+def get_entities(transcript):
+    try:
+        response = query_chain.invoke({"transcript": transcript})
+        if isinstance(response.content, str):
+            return json.loads(response.content)
+        elif isinstance(response.content, dict):
+            return response.content
+        else:
+            raise ValueError("Unexpected response type from query_chain")
+    except json.JSONDecodeError:
+        return {"conditions": ["hello"], "medications": ["hello"]}
+    except Exception as e:
+        return {"conditions": [], "medications": []}
 
 def process_transcript(data: Dict, threshold: float = 0.5) -> List[Dict]:
     speakers = []
@@ -69,6 +122,10 @@ def process_transcript(data: Dict, threshold: float = 0.5) -> List[Dict]:
         speaker['total_filler_words'] = sum(sentence['filler_word_count'] for sentence in speaker['transcript'])
         speaker['total_time'] = sum(sentence['duration'] for sentence in speaker['transcript'])
         speaker['average_sentiment'] = sum(sentence['sentiment'] for sentence in speaker['transcript']) / len(speaker['transcript'])
+        speaker['complete_transcript'] = '.'.join(sentence['content'] for sentence in speaker['transcript'])
+        entities = get_entities(speaker['complete_transcript'])
+        speaker['conditions'] = entities['conditions']
+        speaker['medications'] = entities['medications']
 
     return speakers
 
