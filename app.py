@@ -1,4 +1,5 @@
 import base64
+import os
 from typing import List, Dict
 import requests
 from fastapi import FastAPI, HTTPException
