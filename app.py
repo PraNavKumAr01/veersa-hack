@@ -3,10 +3,13 @@ from typing import List, Dict
 import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI()
 
-API_KEY = '5fb9ea74046c4246fe1b30ae0959771c4018000e'
+API_KEY = os.getenv("DG_API_KEY")
 DEEPGRAM_URL = 'https://api.deepgram.com/v1/listen?model=nova-2&diarize=true&filler_words=true'
 
 class AudioRequest(BaseModel):
