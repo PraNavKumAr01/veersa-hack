@@ -26,8 +26,16 @@ app.add_middleware(
 API_KEY = os.getenv("DG_API_KEY")
 DEEPGRAM_URL = 'https://api.deepgram.com/v1/listen?model=nova-2&diarize=true&filler_words=true'
 
+FILLER_WORDS = ['uh', 'um', 'mhmm', 'mm-mm', 'uh-uh', 'uh-huh', 'nuh-uh']
+
 class AudioRequest(BaseModel):
     audio_base64: str
+
+def count_filler_words(sentence: str) -> int:
+    return sum(sentence.lower().split().count(word) for word in FILLER_WORDS)
+
+def get_sentiment(sentence: str) -> float:
+    return TextBlob(sentence).sentiment.polarity
 
 def process_transcript(data: Dict, threshold: float = 0.5) -> List[Dict]:
     speakers = []
@@ -56,14 +64,26 @@ def process_transcript(data: Dict, threshold: float = 0.5) -> List[Dict]:
     if current_sentence:
         add_sentence(speakers, current_speaker, current_sentence, start_time, end_time)
 
+    for speaker in speakers:
+        speaker['total_filler_words'] = sum(sentence['filler_word_count'] for sentence in speaker['transcript'])
+        speaker['total_time'] = sum(sentence['duration'] for sentence in speaker['transcript'])
+        speaker['average_sentiment'] = sum(sentence['sentiment'] for sentence in speaker['transcript']) / len(speaker['transcript'])
+
     return speakers
 
 def add_sentence(speakers: List[Dict], speaker: int, sentence: str, start: float, end: float):
+    filler_word_count = count_filler_words(sentence)
+    duration = end - start
+    sentiment = get_sentiment(sentence)
+
     for s in speakers:
         if s['speaker'] == speaker:
             s['transcript'].append({
                 "content": sentence.strip(),
-                "time_stamp": f"{start:.2f} - {end:.2f}"
+                "time_stamp": f"{start:.2f} - {end:.2f}",
+                "filler_word_count": filler_word_count,
+                "duration": duration,
+                "sentiment": sentiment
             })
             return
 
@@ -71,14 +91,16 @@ def add_sentence(speakers: List[Dict], speaker: int, sentence: str, start: float
         "speaker": speaker,
         "transcript": [{
             "content": sentence.strip(),
-            "time_stamp": f"{start:.2f} - {end:.2f}"
+            "time_stamp": f"{start:.2f} - {end:.2f}",
+            "filler_word_count": filler_word_count,
+            "duration": duration,
+            "sentiment": sentiment
         }]
     })
 
 @app.post("/transcribe")
 async def transcribe_audio(audio_request: AudioRequest):
     try:
-
         audio_bytes = base64.b64decode(audio_request.audio_base64)
 
         headers = {
